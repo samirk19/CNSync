@@ -1,20 +1,108 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Canvas to Notion</title>
-  <link rel="stylesheet" href="popup.css">
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="container">
-    <h1>Canvas → Notion</h1>
-    <p class="subtitle">Sync your assignments</p>
+    <div class="header">
+        <h1>Canvas to Notion</h1>
+    </div>
 
-    <button id="send-btn">Add Sample Row to TestDB</button>
+    <!-- State 1: Not connected -->
+    <div id="section-auth" class="hidden">
+        <div class="status disconnected">
+            Connect your Notion integration to sync Canvas assignments.
+        </div>
+        <div class="form-group">
+            <label for="input-token">Integration Token</label>
+            <input type="password" id="input-token" placeholder="ntn_...">
+            <div class="help-text">
+                Create an integration at
+                <a href="#" id="link-integrations">notion.so/my-integrations</a>,
+                then paste the token here.
+            </div>
+        </div>
+        <button class="btn-primary" id="btn-connect">Connect</button>
+        <div id="auth-error" class="error-msg hidden"></div>
+    </div>
 
-    <div id="status" class="status hidden"></div>
-  </div>
-  <script src="popup.js" type="module"></script>
+    <!-- State 2: Pick parent page -->
+    <div id="section-setup" class="hidden">
+        <div class="status info">
+            Choose a page where the assignments database will be created.
+        </div>
+        <div class="help-text" style="margin-bottom: 8px;">
+            Make sure you've shared the target page with your integration
+            (page menu &rarr; Connections &rarr; add your integration).
+        </div>
+        <div class="form-group">
+            <input type="text" id="page-search" placeholder="Search pages...">
+        </div>
+        <div id="page-list" class="page-list"></div>
+        <button class="btn-primary" id="btn-create-db" disabled>Create Database</button>
+        <button class="btn-secondary" id="btn-refresh-pages">Refresh Pages</button>
+        <div id="setup-error" class="error-msg hidden"></div>
+    </div>
+
+    <!-- State 3: Fully configured -->
+    <div id="section-main" class="hidden">
+        <div class="status connected">
+            <div class="user-info" id="display-integration"></div>
+            <div class="sync-time" id="display-sync"></div>
+            <div class="sync-result" id="display-result"></div>
+        </div>
+
+        <div id="courses-section" class="courses-section hidden">
+            <h3>Courses</h3>
+            <div id="courses-prompt" class="help-text" style="margin-bottom: 8px;">
+                Select the courses you want to sync, then click Sync Now.
+            </div>
+            <div id="courses-list"></div>
+        </div>
+
+        <div id="no-courses-msg" class="status info hidden">
+            No courses discovered yet. Visit a Canvas page to detect your courses.
+        </div>
+
+        <button class="btn-primary" id="btn-sync" disabled>Sync Now</button>
+        <button class="btn-secondary btn-small" id="btn-force-sync" disabled style="width:100%;margin-bottom:8px;">Force Full Sync (Clear Cache)</button>
+
+        <div id="accounts-section" class="accounts-section hidden">
+            <h3>Canvas Accounts</h3>
+            <div id="accounts-list"></div>
+        </div>
+
+        <div id="canvas-token-section" class="canvas-token-section">
+            <h3>Background Sync</h3>
+            <div class="help-text" style="margin-bottom: 8px;">
+                Optional. Add a Canvas API token to sync even when no Canvas tab is open.
+                Generate one in Canvas &rarr; Account &rarr; Settings &rarr; New Access Token.
+            </div>
+            <div id="canvas-token-saved" class="canvas-token-saved hidden">
+                <span class="canvas-token-status">Connected to <strong id="canvas-token-domain"></strong></span>
+            </div>
+            <div id="canvas-token-form">
+                <div class="form-group">
+                    <label for="input-canvas-url">Canvas URL</label>
+                    <input type="text" id="input-canvas-url" placeholder="https://canvas.vt.edu">
+                </div>
+                <div class="form-group">
+                    <label for="input-canvas-token">API Token</label>
+                    <input type="password" id="input-canvas-token" placeholder="Paste your Canvas token">
+                </div>
+                <button class="btn-primary btn-small" id="btn-save-canvas-token" style="width:100%;margin-bottom:4px;">Save</button>
+            </div>
+            <button class="btn-secondary btn-small hidden" id="btn-clear-canvas-token" style="width:100%;">Clear Token</button>
+            <div id="canvas-token-error" class="error-msg hidden"></div>
+        </div>
+
+        <div class="settings-section">
+            <button class="btn-secondary" id="btn-change-db">Change Database</button>
+            <button class="btn-danger" id="btn-disconnect">Disconnect</button>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
 </body>
 </html>
