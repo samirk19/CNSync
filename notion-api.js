@@ -66,27 +66,38 @@ export class NotionClient {
             parent: { type: "page_id", page_id: parentPageId },
             title: [{ type: "text", text: { content: "Canvas Assignments" } }],
             properties: {
-                "Assignment Name": { title: {} },
+                "Name": { title: {} },
                 Course: {
                     select: { options: [] },
                 },
-                "Course Code": { rich_text: {} },
                 "Due Date": { date: {} },
-                Points: { number: { format: "number" } },
                 Status: {
                     select: {
                         options: [
-                            { name: "Unsubmitted", color: "default" },
-                            { name: "Submitted", color: "blue" },
-                            { name: "Graded", color: "green" },
-                            { name: "Late", color: "orange" },
-                            { name: "Missing", color: "red" },
+                            { name: "Not started", color: "gray" },
+                            { name: "In progress", color: "blue" },
+                            { name: "Submitted", color: "green" },
                         ],
                     },
                 },
-                "Canvas ID": { rich_text: {} },
-                "Canvas URL": { url: {} },
-                "Last Synced": { date: {} },
+                Type: {
+                    select: { options: [
+                        { name: "Homework", color: "blue" },
+                        { name: "Quiz", color: "pink" },
+                        { name: "Project", color: "purple" },
+                        { name: "Exam Practice", color: "orange" },
+                        { name: "Exam", color: "yellow" },
+                        { name: "Essay", color: "brown"},
+                        { name: "Lab", color: "green" },
+                        { name: "Notes", color: "gray" },
+                        { name: "Task", color: "red" },
+                        { name: "Lab Report", color: "green" },
+                        { name: "Survey", color: "default" },
+                        { name: "Speech", color: "brown" },
+                        { name: "Discussion Post", color: "yellow" },
+                        { name: "Extra Credit", color: "red" },
+                    ] },
+                }
             },
         });
     }
