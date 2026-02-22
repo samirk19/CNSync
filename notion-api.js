@@ -60,18 +60,67 @@ export class NotionClient {
         });
     }
 
+    // Create the courses database under a parent page
+    async createCoursesDatabase(parentPageId) {
+        return this.request("POST", "/databases", {
+            parent: { type: "page_id", page_id: parentPageId },
+            title: [{ type: "text", text: { content: "Canvas Courses" } }],
+            properties: {
+                "Name": { title: {} },
+                "Canvas Course ID": { rich_text: {} },
+            },
+        });
+    }
+
+    // Create a course page in the courses database
+    async createCoursePage(coursesDatabaseId, courseName, canvasCourseId) {
+        return this.request("POST", "/pages", {
+            parent: { type: "database_id", database_id: coursesDatabaseId },
+            properties: {
+                "Name": {
+                    title: [{ type: "text", text: { content: courseName } }],
+                },
+                "Canvas Course ID": {
+                    rich_text: [{ type: "text", text: { content: String(canvasCourseId) } }],
+                },
+            },
+        });
+    }
+
+    // Query all pages in the courses database
+    async queryCoursesDatabase(coursesDatabaseId) {
+        const pages = [];
+        let cursor = undefined;
+        do {
+            const body = { page_size: 100 };
+            if (cursor) body.start_cursor = cursor;
+            const result = await this.request(
+                "POST",
+                `/databases/${coursesDatabaseId}/query`,
+                body
+            );
+            pages.push(...result.results);
+            cursor = result.has_more ? result.next_cursor : undefined;
+        } while (cursor);
+        return pages;
+    }
+
     // Create the assignments database under a parent page
-    async createDatabase(parentPageId) {
+    async createDatabase(parentPageId, coursesDatabaseId) {
         return this.request("POST", "/databases", {
             parent: { type: "page_id", page_id: parentPageId },
             title: [{ type: "text", text: { content: "Canvas Assignments" } }],
             properties: {
                 "Name": { title: {} },
-                Course: {
-                    select: { options: [] },
+                "Course": {
+                    relation: {
+                        database_id: coursesDatabaseId,
+                        type: "single_property",
+                        single_property: {},
+                    },
                 },
                 "Due Date": { date: {} },
-                Status: {
+                "Status": {
                     select: {
                         options: [
                             { name: "Not started", color: "gray" },
@@ -80,14 +129,14 @@ export class NotionClient {
                         ],
                     },
                 },
-                Type: {
+                "Type": {
                     select: { options: [
                         { name: "Homework", color: "blue" },
                         { name: "Quiz", color: "pink" },
                         { name: "Project", color: "purple" },
                         { name: "Exam Practice", color: "orange" },
                         { name: "Exam", color: "yellow" },
-                        { name: "Essay", color: "brown"},
+                        { name: "Essay", color: "brown" },
                         { name: "Lab", color: "green" },
                         { name: "Notes", color: "gray" },
                         { name: "Task", color: "red" },
@@ -96,8 +145,9 @@ export class NotionClient {
                         { name: "Speech", color: "brown" },
                         { name: "Discussion Post", color: "yellow" },
                         { name: "Extra Credit", color: "red" },
-                    ] },
-                }
+                    ]},
+                },
+                "Canvas ID": { rich_text: {} },
             },
         });
     }

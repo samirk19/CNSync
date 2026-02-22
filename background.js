@@ -130,14 +130,18 @@ async function setupDatabase(parentPageId) {
 
     try {
         const client = new NotionClient(notionToken);
-        const db = await client.createDatabase(parentPageId);
+
+        // Create the Courses DB first so we can link it in the Assignments DB
+        const coursesDb = await client.createCoursesDatabase(parentPageId);
+        const db = await client.createDatabase(parentPageId, coursesDb.id);
 
         await browserAPI.storage.local.set({
             databaseId: db.id,
+            coursesDatabaseId: coursesDb.id,
             parentPageId: parentPageId,
         });
 
-        return { success: true, databaseId: db.id };
+        return { success: true, databaseId: db.id, coursesDatabaseId: coursesDb.id };
     } catch (err) {
         return { error: err.message };
     }
@@ -238,6 +242,54 @@ function buildSyncCache(syncData) {
 }
 
 // ---------------------------------------------------------------------------
+// Course page resolver — lazily creates/updates course pages, caches IDs
+// ---------------------------------------------------------------------------
+
+/**
+ * Ensures every course in syncData has a corresponding Notion page in the
+ * Courses database. Returns a Map<canvasCourseId (string) → notionPageId>.
+ *
+ * Course pages are matched by Canvas Course ID (stable). Names are set only
+ * on creation — renaming in Notion is preserved on subsequent syncs.
+ */
+async function ensureCoursePages(client, coursesDatabaseId, courses) {
+    const { coursePageCache = {} } = await browserAPI.storage.local.get("coursePageCache");
+
+    // Build a map from canvasCourseId → pageId from Notion (source of truth for IDs)
+    const existingPages = await client.queryCoursesDatabase(coursesDatabaseId);
+    const notionCourseMap = new Map(); // canvasCourseId → pageId
+    for (const page of existingPages) {
+        const idProp = page.properties["Canvas Course ID"];
+        const canvasCourseId = idProp?.rich_text?.[0]?.plain_text;
+        if (canvasCourseId) {
+            notionCourseMap.set(canvasCourseId, page.id);
+        }
+    }
+
+    const resultMap = new Map(); // canvasCourseId → notionPageId (what we return)
+
+    for (const course of courses) {
+        const canvasCourseId = String(course.canvas_course_id);
+
+        const existingPageId = notionCourseMap.get(canvasCourseId);
+        if (existingPageId) {
+            // Page exists — use it as-is, preserving any name the user set in Notion
+            resultMap.set(canvasCourseId, existingPageId);
+            coursePageCache[canvasCourseId] = { pageId: existingPageId };
+        } else {
+            // New course — create the page using the Canvas name as the initial name
+            console.log(`[CanvasNotion] Creating course page for "${course.name}"`);
+            const newPage = await client.createCoursePage(coursesDatabaseId, course.name, canvasCourseId);
+            resultMap.set(canvasCourseId, newPage.id);
+            coursePageCache[canvasCourseId] = { pageId: newPage.id };
+        }
+    }
+
+    await browserAPI.storage.local.set({ coursePageCache });
+    return resultMap;
+}
+
+// ---------------------------------------------------------------------------
 // Notion sync — diff-based upsert from Canvas data
 // ---------------------------------------------------------------------------
 async function handleNotionSync(syncData) {
@@ -246,11 +298,13 @@ async function handleNotionSync(syncData) {
         return { skipped: true, reason: "debounced" };
     }
 
-    const { notionToken, databaseId, syncCache } = await browserAPI.storage.local.get([
-        "notionToken",
-        "databaseId",
-        "syncCache",
-    ]);
+    const { notionToken, databaseId, coursesDatabaseId, syncCache } =
+        await browserAPI.storage.local.get([
+            "notionToken",
+            "databaseId",
+            "coursesDatabaseId",
+            "syncCache",
+        ]);
 
     if (!notionToken || !databaseId) {
         return { error: "Not configured — connect Notion and set up a database first" };
@@ -294,7 +348,17 @@ async function handleNotionSync(syncData) {
             };
         }
 
-        // Step 2: Query Notion pages for page IDs (needed for updates and dedup on creates)
+        // Step 2: Ensure course pages exist and get their Notion page IDs
+        let coursePageMap = new Map(); // canvasCourseId → notionPageId
+        if (coursesDatabaseId) {
+            console.log("[CanvasNotion] Ensuring course pages...");
+            coursePageMap = await ensureCoursePages(client, coursesDatabaseId, syncData.courses);
+            console.log(`[CanvasNotion] Course pages ready: ${coursePageMap.size} courses`);
+        } else {
+            console.warn("[CanvasNotion] No coursesDatabaseId — Course relation will be skipped");
+        }
+
+        // Step 3: Query Notion pages for page IDs (needed for updates and dedup on creates)
         console.log("[CanvasNotion] Querying existing pages...");
         const existingPages = await client.queryAllPages(databaseId);
 
@@ -313,11 +377,10 @@ async function handleNotionSync(syncData) {
             `[CanvasNotion] Found ${canvasIdToPageId.size} existing entries in Notion`
         );
 
-        // Step 3: Push only changed assignments
+        // Step 4: Push only changed assignments
         let created = 0;
         let updated = 0;
         let failed = 0;
-        const syncTimestamp = new Date().toISOString();
 
         console.log(
             `[CanvasNotion] Processing ${toCreate.length} creates and ${toUpdate.length} updates...`
@@ -325,11 +388,12 @@ async function handleNotionSync(syncData) {
 
         for (const item of toCreate) {
             try {
+                const coursePageId = coursePageMap.get(String(item.course.canvas_course_id)) || null;
                 const properties = buildNotionProperties(
                     item.course,
                     item.assignment,
                     item.canvasId,
-                    syncTimestamp
+                    coursePageId
                 );
                 const existingPageId = canvasIdToPageId.get(item.canvasId);
                 if (existingPageId) {
@@ -350,11 +414,12 @@ async function handleNotionSync(syncData) {
 
         for (const item of toUpdate) {
             try {
+                const coursePageId = coursePageMap.get(String(item.course.canvas_course_id)) || null;
                 const properties = buildNotionProperties(
                     item.course,
                     item.assignment,
                     item.canvasId,
-                    syncTimestamp
+                    coursePageId
                 );
                 const existingPageId = canvasIdToPageId.get(item.canvasId);
                 if (existingPageId) {
@@ -373,7 +438,7 @@ async function handleNotionSync(syncData) {
             }
         }
 
-        // Step 4: Save cache and results
+        // Step 5: Save cache and results
         const newCache = buildSyncCache(syncData);
         lastSyncTime = now;
         await browserAPI.storage.local.set({
@@ -406,49 +471,61 @@ async function handleNotionSync(syncData) {
 // ---------------------------------------------------------------------------
 // Build Notion properties object for an assignment
 // ---------------------------------------------------------------------------
-function buildNotionProperties(course, assignment, canvasId, syncTimestamp) {
-    const statusMap = {
-        unsubmitted: "Unsubmitted",
-        submitted: "Submitted",
-        graded: "Graded",
-        late: "Late",
-        missing: "Missing",
-    };
 
+// Infer a Type from the assignment name / submission_types heuristically
+function inferType(assignment) {
+    const name = (assignment.name || "").toLowerCase();
+    const types = assignment.submission_types || [];
+
+    if (name.includes("exam") && name.includes("practice")) return "Exam Practice";
+    if (name.includes("exam") || name.includes("midterm") || name.includes("final")) return "Exam";
+    if (name.includes("quiz")) return "Quiz";
+    if (name.includes("lab report")) return "Lab Report";
+    if (name.includes("lab")) return "Lab";
+    if (name.includes("essay") || name.includes("paper") || name.includes("writing")) return "Essay";
+    if (name.includes("project")) return "Project";
+    if (name.includes("survey")) return "Survey";
+    if (name.includes("speech") || name.includes("presentation")) return "Speech";
+    if (name.includes("extra credit")) return "Extra Credit";
+    if (name.includes("notes")) return "Notes";
+    if (types.includes("discussion_topic") || name.includes("discussion")) return "Discussion Post";
+    return "Homework";
+}
+
+const SUBMISSION_STATUS_MAP = {
+    submitted: "Submitted",
+    graded: "Submitted",
+    late: "Submitted",
+    missing: "Not started",
+    unsubmitted: "Not started",
+};
+
+function buildNotionProperties(course, assignment, canvasId, coursePageId) {
     const props = {
-        "Assignment Name": {
+        "Name": {
             title: [{ type: "text", text: { content: assignment.name } }],
         },
-        Course: {
-            select: { name: course.name },
-        },
-        "Course Code": {
-            rich_text: [
-                { type: "text", text: { content: course.course_code || "" } },
-            ],
-        },
-        Points: {
-            number: assignment.points_possible || 0,
-        },
-        Status: {
+        "Status": {
             select: {
-                name: statusMap[assignment.submission?.status] || "Unsubmitted",
+                name: SUBMISSION_STATUS_MAP[assignment.submission?.status] || "Not started",
             },
+        },
+        "Type": {
+            select: { name: inferType(assignment) },
         },
         "Canvas ID": {
             rich_text: [{ type: "text", text: { content: canvasId } }],
         },
-        "Last Synced": {
-            date: { start: syncTimestamp },
-        },
     };
+
+    if (coursePageId) {
+        props["Course"] = {
+            relation: [{ id: coursePageId }],
+        };
+    }
 
     if (assignment.due_at) {
         props["Due Date"] = { date: { start: assignment.due_at } };
-    }
-
-    if (assignment.html_url) {
-        props["Canvas URL"] = { url: assignment.html_url };
     }
 
     return props;
